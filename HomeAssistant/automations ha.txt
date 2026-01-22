@@ -1,0 +1,184 @@
+- id: '1762748168988'
+  alias: Gate - Request Database on HA Restart
+  triggers:
+  - event: start
+    trigger: homeassistant
+  actions:
+  - delay: 00:00:30
+  - action: script.gate_sync_database
+  - delay: 00:00:05
+  - action: script.gate_sync_schedule_config
+
+- id: '1762748191627'
+  alias: Gate - Force Sensor Update
+  triggers:
+  - topic: office/gate/user_database
+    trigger: mqtt
+  actions:
+  - target:
+      entity_id: sensor.gate_controller_gate_user_database_2
+    action: homeassistant.update_entity
+
+- id: '1762757257905'
+  alias: Gate - Unknown Card Notification
+  triggers:
+  - topic: office/gate/unknown_card
+    trigger: mqtt
+  actions:
+  - data:
+      title: "🆔 Kartu Tidak Terdaftar!"
+      message: 'Card ID: **{{ trigger.payload_json.card_id }}**
+        Waktu: {{ trigger.payload_json.timestamp }}'
+    action: persistent_notification.create
+  - target:
+      entity_id: input_text.gate_user_id
+    data:
+      value: '{{ trigger.payload_json.card_id }}'
+    action: input_text.set_value
+
+- id: '1762757275033'
+  alias: Gate - Card Tap Notification
+  triggers:
+  - topic: office/gate/card_tap
+    trigger: mqtt
+  actions:
+  - choose:
+    - conditions:
+      - condition: template
+        value_template: '{{ trigger.payload_json.status == ''unknown'' }}'
+      sequence:
+      - data:
+          title: "🆔 Kartu Tidak Dikenal"
+          message: 'Card ID: {{ trigger.payload_json.card_id }}'
+        action: notify.notify
+    - conditions:
+      - condition: template
+        value_template: '{{ trigger.payload_json.status == ''registered'' }}'
+      sequence:
+      - data:
+          title: ✅ Kartu Terdeteksi
+          message: '{{ trigger.payload_json.user_name }} ({{ trigger.payload_json.role }})'
+        action: notify.notify
+
+- id: '1762831563262'
+  alias: Gate - Sync Schedule on Change (Delayed)
+  mode: restart
+  triggers:
+  - entity_id:
+    - input_datetime.karyawan_start_time
+    - input_datetime.karyawan_end_time
+    - input_select.karyawan_work_days
+    - input_datetime.office_boy_start_time
+    - input_datetime.office_boy_end_time
+    - input_select.office_boy_work_days
+    - input_datetime.anak_magang_start_time
+    - input_datetime.anak_magang_end_time
+    - input_select.anak_magang_work_days
+    trigger: state
+    for: "00:00:05"
+  actions:
+  - action: script.gate_sync_schedule_config
+
+- id: '1762831601889'
+  alias: Gate - ESP32 Online Sync Schedule
+  triggers:
+  - entity_id: sensor.gate_controller_gate_esp32_status_2
+    to: online
+    trigger: state
+  actions:
+  - delay: 00:00:10
+  - action: script.gate_sync_schedule_config
+
+# ===== LOGGING AUTOMATIONS =====
+
+- id: 'gate_log_sync_periodic'
+  alias: Gate - Sync Logs Every 5 Minutes
+  triggers:
+  - trigger: time_pattern
+    minutes: '/5'
+  conditions:
+  - condition: template
+    value_template: "{{ states('sensor.gate_controller_gate_log_buffer_status_2') | int(0) > 0 }}"
+  actions:
+  - action: mqtt.publish
+    data: { topic: gate/logs/cmd, payload: sync }
+  - action: persistent_notification.create
+    data:
+      title: "🔄 Auto Log Sync"
+      message: "Syncing {{ states('sensor.gate_controller_gate_log_buffer_status_2') }} logs..."
+
+- id: 'gate_log_sync_on_reconnect'
+  alias: Gate - Sync Logs When Reconnected
+  triggers:
+  - entity_id: sensor.gate_controller_gate_esp32_status_2
+    from: 'unavailable'
+    to: online
+    trigger: state
+  - entity_id: sensor.gate_controller_gate_esp32_status_2
+    from: 'unknown'
+    to: online
+    trigger: state
+  actions:
+  - delay: 00:00:15
+  - action: script.gate_sync_logs_manual
+
+- id: 'gate_log_save_to_file'
+  alias: Gate - Save Logs to CSV File
+  description: 'Save logs using External Python Script (Bypass)'
+  mode: queued
+  triggers:
+  - topic: gate/logs/batch
+    trigger: mqtt
+  actions:
+  - action: persistent_notification.create
+    data:
+      title: "✅ Logs Disimpan"
+      message: "Menulis {{ trigger.payload_json.count }} data ke CSV."
+  
+  - repeat:
+      for_each: "{{ trigger.payload_json.logs | default([]) }}"
+      sequence:
+        - action: shell_command.write_gate_log
+          data:
+            time: "{{ repeat.item.timestamp }}"
+            name: "{{ repeat.item.user_name }}"
+            role: "{{ repeat.item.role }}"
+            status: "{{ repeat.item.status }}"
+            reason: "{{ repeat.item.reason }}"
+            source: "{{ repeat.item.source }}"
+
+- id: 'gate_log_clear_after_sync'
+  alias: Gate - Clear Buffer After Sync
+  triggers:
+  - topic: gate/logs/batch
+    trigger: mqtt
+  conditions:
+  - condition: template
+    value_template: "{{ trigger.payload_json.count | int(0) > 0 }}"
+  actions:
+  - delay: 00:00:02
+  - action: mqtt.publish
+    data: { topic: gate/logs/cmd, payload: clear }
+
+- id: 'gate_log_buffer_warning'
+  alias: Gate - Log Buffer Warning
+  triggers:
+  - entity_id: sensor.gate_controller_gate_log_buffer_status_2
+    trigger: state
+  conditions:
+  - condition: template
+    value_template: "{{ trigger.to_state.state | int(0) >= 80 }}"
+  actions:
+  - action: persistent_notification.create
+    data:
+      title: "⚠️ Log Buffer Penuh"
+      message: "Buffer log hampir penuh!"
+
+- id: 'gate_log_ha_startup_sync'
+  alias: Gate - Sync Logs on HA Startup
+  triggers:
+  - event: start
+    trigger: homeassistant
+  actions:
+  - delay: 00:01:00
+  - action: script.gate_sync_logs_manual

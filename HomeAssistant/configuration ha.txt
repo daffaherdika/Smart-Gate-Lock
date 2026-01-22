@@ -1,0 +1,179 @@
+# Loads default set of integrations. Do not remove.
+default_config:
+
+# Load frontend themes from the themes folder
+frontend:
+  themes: !include_dir_merge_named themes
+
+automation: !include automations.yaml
+script: !include scripts.yaml
+scene: !include scenes.yaml
+
+# Aktifkan fitur Python Script 
+python_script:
+
+# ===== INPUT HELPERS UNTUK USER MANAGEMENT =====
+input_text:
+  gate_user_id:
+    name: "Card ID / UID"
+    max: 50
+  gate_user_name:
+    name: "Nama Pengguna"
+    max: 100
+  gate_user_expire:
+    name: "Tanggal Kadaluarsa (YYYY-MM-DD)"
+    max: 10
+    initial: "2025-12-31"
+  gate_user_secret:
+    name: "TOTP Secret (Isi untuk aktifkan OTP)"
+    icon: mdi:shield-key
+    max: 32
+    initial: ""
+
+input_select:
+  gate_user_role:
+    name: "Role Pengguna"
+    options:
+      - karyawan
+      - office_boy
+      - anak_magang
+    initial: karyawan
+  
+  karyawan_work_days:
+    name: "Hari Kerja Karyawan"
+    options:
+      - "Senin - Jumat"
+      - "Senin - Sabtu"
+      - "Senin - Minggu"
+      - "Setiap Hari"
+    initial: "Senin - Jumat"
+  
+  office_boy_work_days:
+    name: "Hari Kerja Office Boy"
+    options:
+      - "Senin - Jumat"
+      - "Senin - Sabtu"
+      - "Senin - Minggu"
+      - "Setiap Hari"
+    initial: "Senin - Sabtu"
+  
+  anak_magang_work_days:
+    name: "Hari Kerja Anak Magang"
+    options:
+      - "Senin - Jumat"
+      - "Senin - Sabtu"
+      - "Senin - Minggu"
+      - "Setiap Hari"
+    initial: "Senin - Jumat"
+
+input_boolean:
+  gate_user_no_expire:
+    name: "Tidak Ada Kadaluarsa"
+    initial: true
+
+input_datetime:
+  karyawan_start_time:
+    name: "Jam Masuk Karyawan"
+    has_date: false
+    has_time: true
+    initial: "07:00"
+  
+  karyawan_end_time:
+    name: "Jam Pulang Karyawan"
+    has_date: false
+    has_time: true
+    initial: "19:00"
+  
+  office_boy_start_time:
+    name: "Jam Masuk Office Boy"
+    has_date: false
+    has_time: true
+    initial: "06:00"
+  
+  office_boy_end_time:
+    name: "Jam Pulang Office Boy"
+    has_date: false
+    has_time: true
+    initial: "20:00"
+  
+  anak_magang_start_time:
+    name: "Jam Masuk Anak Magang"
+    has_date: false
+    has_time: true
+    initial: "07:00"
+  
+  anak_magang_end_time:
+    name: "Jam Pulang Anak Magang"
+    has_date: false
+    has_time: true
+    initial: "17:00"
+
+# ===== TEMPLATE SENSORS =====
+template:
+  - sensor:
+      - name: "Gate Users List"
+        # UPDATE: Menambahkan _2 pada entity ID
+        state: >
+          {{ state_attr('sensor.gate_controller_gate_user_database_2', 'total_users') | default(0) }}
+        attributes:
+          users: >
+            {{ state_attr('sensor.gate_controller_gate_user_database_2', 'users') | default([]) }}
+          last_update: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+      
+      - name: "Gate User Count"
+        # UPDATE: Menambahkan _2 pada entity ID
+        state: "{{ state_attr('sensor.gate_controller_gate_user_database_2', 'total_users') | default(0) }}"
+        unit_of_measurement: "users"
+        icon: mdi:account-multiple
+      
+      - name: "Gate Schedule Summary"
+        state: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+        attributes:
+          karyawan: >
+            {{ states('input_datetime.karyawan_start_time') }} - {{ states('input_datetime.karyawan_end_time') }}, 
+            {{ states('input_select.karyawan_work_days') }}
+          office_boy: >
+            {{ states('input_datetime.office_boy_start_time') }} - {{ states('input_datetime.office_boy_end_time') }}, 
+            {{ states('input_select.office_boy_work_days') }}
+          anak_magang: >
+            {{ states('input_datetime.anak_magang_start_time') }} - {{ states('input_datetime.anak_magang_end_time') }}, 
+            {{ states('input_select.anak_magang_work_days') }}
+      
+      - name: "Gate Log Buffer Count"
+        # UPDATE: Menambahkan _2 pada entity ID
+        state: >
+          {{ state_attr('sensor.gate_controller_gate_log_buffer_status_2', 'buffer_count') | default(0) | int(0) }}
+        unit_of_measurement: "logs"
+        icon: mdi:database
+        attributes:
+          remaining: >
+            {% set max = state_attr('sensor.gate_controller_gate_log_buffer_status_2', 'max_buffer') | default(100) | int(100) %}
+            {% set current = state_attr('sensor.gate_controller_gate_log_buffer_status_2', 'buffer_count') | default(0) | int(0) %}
+            {{ max - current }}
+          last_sync: >
+            {{ state_attr('sensor.gate_controller_gate_log_buffer_status_2', 'timestamp') | default('Belum Sync') }}
+          percentage_full: >
+            {% set max = state_attr('sensor.gate_controller_gate_log_buffer_status_2', 'max_buffer') | default(100) | int(100) %}
+            {% set current = state_attr('sensor.gate_controller_gate_log_buffer_status_2', 'buffer_count') | default(0) | int(0) %}
+            {% if max > 0 %}
+              {{ ((current / max) * 100) | round(1) }}
+            {% else %}
+              0
+            {% endif %}
+
+  # SENSOR UNTUK MENYIMPAN LOG YANG DITERIMA
+  - trigger:
+      - platform: mqtt
+        topic: gate/logs/batch
+    sensor:
+      - name: "Gate Access Logs"
+        state: "{{ trigger.payload_json.count | default(0) }}"
+        attributes:
+          logs: "{{ trigger.payload_json.logs | default([]) }}"
+          last_sync: "{{ trigger.payload_json.timestamp | default('N/A') }}"
+          total_received: "{{ trigger.payload_json.logs | default([]) | length }}"
+
+# ===== LOGGER CONFIGURATION =====
+shell_command:
+  # Menjalankan file python eksternal via Terminal
+  write_gate_log: 'python3 /config/gate_logger.py "{{ time }},{{ name }},{{ role }},{{ status }},{{ reason }},{{ source }}"'

@@ -1,0 +1,182 @@
+gate_sync_schedule_config:
+  alias: "Sync Schedule Configuration to ESP32"
+  sequence:
+    - service: mqtt.publish
+      data:
+        topic: "office/gate/schedule_config"
+        payload: >
+          {
+            "karyawan": {
+              "start_hour": {{ states('input_datetime.karyawan_start_time')[0:2] | int }},
+              "start_minute": {{ states('input_datetime.karyawan_start_time')[3:5] | int }},
+              "end_hour": {{ states('input_datetime.karyawan_end_time')[0:2] | int }},
+              "end_minute": {{ states('input_datetime.karyawan_end_time')[3:5] | int }},
+              "work_days": "{{ states('input_select.karyawan_work_days') }}"
+            },
+            "office_boy": {
+              "start_hour": {{ states('input_datetime.office_boy_start_time')[0:2] | int }},
+              "start_minute": {{ states('input_datetime.office_boy_start_time')[3:5] | int }},
+              "end_hour": {{ states('input_datetime.office_boy_end_time')[0:2] | int }},
+              "end_minute": {{ states('input_datetime.office_boy_end_time')[3:5] | int }},
+              "work_days": "{{ states('input_select.office_boy_work_days') }}"
+            },
+            "anak_magang": {
+              "start_hour": {{ states('input_datetime.anak_magang_start_time')[0:2] | int }},
+              "start_minute": {{ states('input_datetime.anak_magang_start_time')[3:5] | int }},
+              "end_hour": {{ states('input_datetime.anak_magang_end_time')[0:2] | int }},
+              "end_minute": {{ states('input_datetime.anak_magang_end_time')[3:5] | int }},
+              "work_days": "{{ states('input_select.anak_magang_work_days') }}"
+            }
+          }
+    - service: persistent_notification.create
+      data:
+        title: "✅ Schedule Disinkronkan"
+        message: "Konfigurasi jadwal akses telah dikirim ke ESP32"
+
+gate_add_user:
+  alias: "Tambah User Pagar"
+  sequence:
+    # Validasi Input
+    - if:
+        - condition: template
+          value_template: >
+            {{ states('input_text.gate_user_id') | length == 0 or 
+               states('input_text.gate_user_name') | length == 0 }}
+      then:
+        - service: persistent_notification.create
+          data:
+            title: "❌ Error: Input Tidak Lengkap"
+            message: "Card ID dan Nama wajib diisi!"
+        - stop: "Input tidak valid"
+    
+    - if:
+        - condition: template
+          value_template: "{{ states('input_text.gate_user_id') | lower == 'unknown' }}"
+      then:
+        - service: persistent_notification.create
+          data:
+            title: "❌ Error"
+            message: "Card ID tidak boleh 'unknown'!"
+        - stop: "Input tidak valid"
+    
+    # Kirim ke ESP32 (BAGIAN INI DIPERBARUI KE INPUT_DATETIME)
+    - service: mqtt.publish
+      data:
+        topic: "office/gate/user_management"
+        payload: >
+          {
+            "action": "add",
+            "user": {
+              "id": "{{ states('input_text.gate_user_id') }}",
+              "name": "{{ states('input_text.gate_user_name') }}",
+              "role": "{{ states('input_select.gate_user_role') }}",
+              "expire": "{% if is_state('input_boolean.gate_user_no_expire', 'on') %}null{% else %}{{ states('input_datetime.gate_user_expire_date') }}{% endif %}",
+              "secret": "{{ states('input_text.gate_user_secret') }}" 
+            }
+          }
+    
+    # Reset Form
+    - service: input_text.set_value
+      target:
+        entity_id: input_text.gate_user_id
+      data: { value: "" }
+    - service: input_text.set_value
+      target:
+        entity_id: input_text.gate_user_name
+      data: { value: "" }
+    - service: input_text.set_value
+      target:
+        entity_id: input_text.gate_user_secret
+      data: { value: "" }
+    
+    - service: persistent_notification.create
+      data:
+        title: "✅ User Ditambahkan"
+        message: "User **{{ states('input_text.gate_user_name') }}** berhasil ditambahkan."
+
+gate_update_user:
+  alias: "Update User Pagar"
+  sequence:
+    - if:
+        - condition: template
+          value_template: "{{ states('input_text.gate_user_id') | length == 0 }}"
+      then:
+        - stop: "Card ID Kosong"
+    
+    # (BAGIAN INI DIPERBARUI KE INPUT_DATETIME)
+    - service: mqtt.publish
+      data:
+        topic: "office/gate/user_management"
+        payload: >
+          {
+            "action": "update",
+            "user": {
+              "id": "{{ states('input_text.gate_user_id') }}",
+              "name": "{{ states('input_text.gate_user_name') }}",
+              "role": "{{ states('input_select.gate_user_role') }}",
+              "expire": "{% if is_state('input_boolean.gate_user_no_expire', 'on') %}null{% else %}{{ states('input_datetime.gate_user_expire_date') }}{% endif %}",
+              "secret": "{{ states('input_text.gate_user_secret') }}"
+            }
+          }
+    - service: persistent_notification.create
+      data:
+        title: "✅ User Diupdate"
+        message: "User **{{ states('input_text.gate_user_name') }}** berhasil diupdate."
+
+gate_delete_user:
+  alias: "Hapus User Pagar"
+  sequence:
+    - if:
+        - condition: template
+          value_template: "{{ states('input_text.gate_user_id') | length == 0 }}"
+      then:
+        - stop: "Card ID Kosong"
+    
+    - service: mqtt.publish
+      data:
+        topic: "office/gate/user_management"
+        payload: >
+          { "action": "delete", "user_id": "{{ states('input_text.gate_user_id') }}" }
+    
+    - service: input_text.set_value
+      target:
+        entity_id: input_text.gate_user_id
+      data: { value: "" }
+    
+    - service: persistent_notification.create
+      data:
+        title: "✅ User Dihapus"
+        message: "User dihapus dari database."
+
+gate_sync_database:
+  alias: "Sinkronisasi Database Pagar"
+  sequence:
+    - service: mqtt.publish
+      data: { topic: "office/gate/command", payload: "request_database" }
+    - service: persistent_notification.create
+      data: { title: "🔄 Sync Database", message: "Meminta database dari ESP32..." }
+
+gate_sync_logs_manual:
+  alias: "Sync Gate Logs Manually"
+  sequence:
+    - service: mqtt.publish
+      data: { topic: "gate/logs/cmd", payload: "sync" }
+    - service: persistent_notification.create
+      data:
+        title: "🔄 Manual Log Sync"
+        message: "Requesting logs from ESP32..."
+
+generate_secret_key:
+  alias: "Generate Random TOTP Key"
+  sequence:
+    - service: input_text.set_value
+      target:
+        entity_id: input_text.gate_user_secret
+      data:
+        value: >-
+          {% set chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567' %}
+          {% set ns = namespace(secret='') %}
+          {% for i in range(16) %}
+            {% set ns.secret = ns.secret + (chars | list | random) %}
+          {% endfor %}
+          {{ ns.secret }}
